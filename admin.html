@@ -16,7 +16,7 @@
   input, select, textarea { width:100%; padding:11px 12px; font-size:1rem; border:1px solid #c9d2e3; border-radius:10px; font-family:inherit; }
   textarea { min-height:70px; }
   button, .btn { padding:11px 16px; font-size:1rem; font-weight:700; color:#fff; background:var(--c); border:0; border-radius:10px; cursor:pointer; display:inline-block; }
-  button.alt { background:#fff; color:var(--c); border:2px solid var(--c); }
+  button.alt, .btn.alt { background:#fff; color:var(--c); border:2px solid var(--c); }
   button.danger { background:#c0392b; }
   button:disabled { opacity:.5; }
   .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -34,9 +34,14 @@
   .pics img { max-height:180px; max-width:100%; border-radius:10px; background:#dde3ee; }
   .pics .f { width:110px; height:110px; border-radius:50%; object-fit:cover; }
   #modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:20px 10px; }
-  #modal .box { width:100%; max-width:760px; }
+  #modal .box, #impM .box { width:100%; max-width:760px; }
   input[type=file] { display:none; }
   @media (max-width:600px) { .form { grid-template-columns:1fr; } }
+#impM { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:20px 10px; }
+  #impList .r { display:flex; gap:8px; align-items:center; padding:7px 10px; border-bottom:1px solid #eef1f6; font-size:.9rem; }
+  #impList .r img { width:36px; height:36px; border-radius:50%; object-fit:cover; background:#dde3ee; }
+  #impList .r small { color:#5a6475; display:block; }
+  #impList .dup { color:#b45309; font-size:.78rem; }
 </style>
 </head>
 <body>
@@ -53,6 +58,8 @@
         <input id="q" placeholder="搜尋姓名、公司…">
         <select id="fc" style="width:auto"><option value="">全部分類</option><option value="115">EMBA 115</option><option value="114">EMBA 114</option><option>獅子會</option><option>家長會</option><option>其他</option></select>
         <button onclick="edit(null)">＋ 新增</button>
+        <label class="btn alt" for="imp" style="margin:0">📇 匯入通訊錄</label>
+        <input type="file" id="imp" accept=".vcf,.vcard,.csv,text/vcard,text/csv" style="display:none">
         <button class="alt" onclick="rebuild()">重算缺少的臉部特徵</button>
       </div>
       <div class="msg" id="msg"></div>
@@ -60,6 +67,22 @@
     <div class="grid" id="list"></div>
   </div>
 </div>
+
+<div id="impM" class="modalx"><div class="box">
+  <h2 style="margin-top:0">匯入通訊錄</h2>
+  <div class="msg">支援手機匯出的 vCard（.vcf）與 Google／Outlook 通訊錄 CSV。有大頭照的會一併匯入並自動找臉；照片之後可在編輯裡再換。</div>
+  <div class="bar" style="margin:10px 0">
+    <label style="margin:0">分類</label>
+    <select id="impCat" style="width:auto"><option value="115">EMBA 115</option><option value="114">EMBA 114</option><option value="113">EMBA 113</option><option value="116">EMBA 116</option><option>獅子會</option><option>家長會</option><option selected>其他</option></select>
+    <input id="impDept" placeholder="所屬（可留白，例：日月光獅子會）" style="flex:1">
+  </div>
+  <div class="bar" style="margin-bottom:6px"><label style="margin:0"><input type="checkbox" id="impAll" checked style="width:auto"> 全選</label><span class="msg" id="impInfo"></span></div>
+  <div id="impList" style="max-height:50vh; overflow:auto; border:1px solid #e3e8f0; border-radius:10px"></div>
+  <div class="bar" style="margin-top:12px; justify-content:flex-end">
+    <button class="alt" onclick="$('impM').style.display='none'">取消</button><button id="impGo" onclick="doImport()">開始匯入</button>
+  </div>
+  <div class="msg" id="impMsg"></div>
+</div></div>
 
 <div id="modal"><div class="box">
   <h2 id="mt" style="margin-top:0">編輯</h2>
@@ -227,6 +250,156 @@ async function rebuild() {
       else await apiPost({ action: 'descriptor', pw: PW, id: p.id, descriptor: null });
     } catch (e) { console.log(e); }
   }
+  load();
+}
+
+/***** 匯入通訊錄（vCard / CSV） *****/
+let impRows = [];
+const isCJK = s => /[\u3400-\u9fff]/.test(s || '');
+function qpDecode(s) {
+  const bytes = []; s = s.replace(/=\r?\n/g, '');
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(s.substr(i + 1, 2))) { bytes.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; }
+    else bytes.push(s.charCodeAt(i));
+  }
+  return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+}
+function vcfUnesc(s) { return s.replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1'); }
+function parseVcf(text) {
+  // 展開折行（含 quoted-printable 的軟換行）
+  text = text.replace(/\r\n/g, '\n').replace(/=\n(?=[^\n])/g, '=\uE000').replace(/\n[ \t]/g, '').replace(/=\uE000/g, '=\n');
+  const out = [];
+  text.split(/BEGIN:VCARD/i).slice(1).forEach(card => {
+    const c = { tel: [], email: [], adr: [], note: '', url: [] };
+    card.split('\n').forEach(line => {
+      const i = line.indexOf(':'); if (i < 0) return;
+      let key = line.slice(0, i), val = line.slice(i + 1);
+      const parts = key.split(';'), name = parts[0].replace(/^item\d+\./i, '').toUpperCase();
+      const params = parts.slice(1).join(';').toUpperCase();
+      if (/QUOTED-PRINTABLE/.test(params)) val = qpDecode(val);
+      if (name === 'PHOTO') {
+        if (/^data:image/i.test(val)) c.photo = val.trim();
+        else if (/ENCODING=B|ENCODING=BASE64|BASE64/.test(params) || (!/^https?:/i.test(val) && val.length > 200)) {
+          const t = /PNG/.test(params) ? 'png' : 'jpeg'; c.photo = 'data:image/' + t + ';base64,' + val.replace(/\s/g, '');
+        }
+        return;
+      }
+      val = vcfUnesc(val.trim());
+      if (name === 'FN') c.fn = val;
+      else if (name === 'N') { const n = val.split(';'); c.n = isCJK(n[0] + n[1]) ? (n[0] + n[1]) : [n[1], n[0]].filter(Boolean).join(' '); }
+      else if (name === 'NICKNAME') c.nick = val;
+      else if (name === 'ORG') c.org = val.split(';').filter(Boolean).join(' ');
+      else if (name === 'TITLE') c.title = val;
+      else if (name === 'TEL') c.tel.push(val);
+      else if (name === 'EMAIL') c.email.push(val);
+      else if (name === 'ADR') c.adr.push(val.split(';').filter(Boolean).join(' '));
+      else if (name === 'URL') c.url.push(val);
+      else if (name === 'NOTE') c.note = val;
+      else if (name === 'BDAY') c.bday = val;
+    });
+    out.push(toPerson(c.fn || c.n || '', c.nick, c.org, c.title, c.tel, c.email, c.adr, c.note, c.bday, c.url, c.photo));
+  });
+  return out;
+}
+function parseCsvText(text) {
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(f); f = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim()));
+}
+function parseCsv(text) {
+  const rows = parseCsvText(text.replace(/^\uFEFF/, '')); if (rows.length < 2) return [];
+  const H = rows[0].map(h => h.trim().toLowerCase());
+  const find = (...res) => H.findIndex(h => res.some(r => r.test(h)));
+  const all = re => H.map((h, i) => re.test(h) ? i : -1).filter(i => i >= 0);
+  const iName = find(/^name$/, /^姓名$/, /^名稱$/, /^display name$/), iFirst = find(/^first name$/, /^given name$/, /^名字?$/),
+    iLast = find(/^last name$/, /^family name$/, /^姓氏?$/), iNick = find(/nickname/, /暱稱/),
+    iOrg = find(/organization.*name/, /^organization$/, /^company$/, /公司/, /服務單位/), iTitle = find(/title/, /職稱/),
+    iNote = find(/^notes?$/, /備註/), iBday = find(/birthday/, /生日/);
+  const tels = all(/phone.*value|phone$|mobile|電話|手機/), mails = all(/e-?mail.*(value|address)|^e-?mail$|電子郵件/),
+    adrs = all(/address.*formatted|^address$|地址/);
+  return rows.slice(1).map(r => {
+    const g = i => i >= 0 ? (r[i] || '').trim() : '';
+    let name = g(iName);
+    if (!name) { const fi = g(iFirst), la = g(iLast); name = isCJK(fi + la) ? la + fi : [fi, la].filter(Boolean).join(' '); }
+    const split = v => v.split(/\s*:::\s*/).filter(Boolean);
+    return toPerson(name, g(iNick), g(iOrg), g(iTitle), tels.flatMap(i => split(g(i))), mails.flatMap(i => split(g(i))),
+      adrs.map(g).filter(Boolean), g(iNote), g(iBday), [], null);
+  });
+}
+function toPerson(name, nick, org, title, tel, email, adr, note, bday, url, photo) {
+  name = (name || '').trim();
+  const p = { name_zh: '', name_en: '', company: org || '', title: title || '', photo: photo || null };
+  if (isCJK(name)) { p.name_zh = name.replace(/\s+/g, ''); p.name_en = nick && !isCJK(nick) ? nick : ''; }
+  else { p.name_en = name; p.name_zh = nick && isCJK(nick) ? nick : name; }
+  const o = [];
+  if (tel && tel.length) o.push('電話 ' + [...new Set(tel)].join(' / '));
+  if (email && email.length) o.push('Email ' + [...new Set(email)].join(' / '));
+  if (adr && adr.length) o.push('地址 ' + adr.join(' / '));
+  if (url && url.length) o.push('網站 ' + url.join(' / '));
+  if (bday) o.push('生日 ' + bday);
+  if (note) o.push(note);
+  p.other = o.join('；');
+  return p;
+}
+async function readText(file) {
+  const buf = await file.arrayBuffer();
+  let t = new TextDecoder('utf-8').decode(buf);
+  if (t.includes('\uFFFD')) { try { t = new TextDecoder('big5').decode(buf); } catch (e) {} }
+  return t;
+}
+$('imp').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const text = await readText(f);
+  impRows = (/BEGIN:VCARD/i.test(text) ? parseVcf(text) : parseCsv(text)).filter(p => p.name_zh);
+  if (!impRows.length) { alert('檔案裡沒有讀到聯絡人，請確認是 .vcf 或通訊錄 CSV'); return; }
+  const names = new Set(people.map(p => p.name_zh));
+  $('impList').innerHTML = '';
+  impRows.forEach((p, i) => {
+    p.dup = names.has(p.name_zh);
+    const d = document.createElement('label'); d.className = 'r';
+    d.innerHTML = `<input type="checkbox" ${p.dup ? '' : 'checked'} data-i="${i}" style="width:auto"><img alt="">
+      <div><b>${esc(p.name_zh)}</b> ${esc(p.name_en !== p.name_zh ? p.name_en : '')} ${p.dup ? '<span class="dup">已有同名</span>' : ''}
+      <small>${esc([p.company, p.title].filter(Boolean).join('・'))}</small></div>`;
+    if (p.photo) d.querySelector('img').src = p.photo;
+    $('impList').appendChild(d);
+  });
+  $('impInfo').textContent = `讀到 ${impRows.length} 位，${impRows.filter(p => p.photo).length} 位有照片` +
+    (impRows.some(p => p.dup) ? `；${impRows.filter(p => p.dup).length} 位已存在（預設不勾）` : '');
+  $('impMsg').textContent = ''; $('impGo').disabled = false;
+  $('impM').style.display = 'flex';
+};
+$('impAll').onchange = () => document.querySelectorAll('#impList input').forEach(c => c.checked = $('impAll').checked);
+async function doImport() {
+  const sel = [...document.querySelectorAll('#impList input:checked')].map(c => impRows[+c.dataset.i]);
+  if (!sel.length) { $('impMsg').textContent = '請至少勾選一位'; return; }
+  $('impGo').disabled = true;
+  const cat = $('impCat').value, dept = $('impDept').value.trim();
+  let ok = 0, fail = 0, faces = 0;
+  for (let i = 0; i < sel.length; i++) {
+    const p = sel[i];
+    $('impMsg').textContent = `匯入中 ${i + 1}/${sel.length}：${p.name_zh}`;
+    const person = { id: '', cohort: cat, dept, name_zh: p.name_zh, name_en: p.name_en === p.name_zh ? '' : p.name_en,
+      company: p.company, title: p.title, zodiac: '', hobbies: '', quote: '', other: p.other };
+    let image = null, face = null;
+    try {
+      if (p.photo) {
+        const c = await toCanvas(p.photo, 1400); image = c.toDataURL('image/jpeg', .85);
+        const a = await analyze(c);
+        if (a) { face = a.face; person.descriptor = a.descriptor; faces++; }
+      }
+      await apiPost({ action: 'save', pw: PW, person, image, face });
+      ok++;
+    } catch (err) { console.log(err); fail++; }
+  }
+  $('impMsg').textContent = `完成：匯入 ${ok} 位（${faces} 位已有臉部特徵）` + (fail ? `，失敗 ${fail} 位` : '') + '。沒照片的可點進去上傳照片。';
   load();
 }
 </script>
