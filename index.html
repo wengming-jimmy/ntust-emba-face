@@ -39,6 +39,10 @@
   .list .row { display:flex; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid #eef1f6; cursor:pointer; background:#fff; }
   .list .row:first-child { border-radius:12px 12px 0 0; } .list .row:last-child { border-radius:0 0 12px 12px; border:0; }
   .list .row small { color:#5a6475; display:block; }
+  .teach { background:#fff; border-radius:16px; padding:12px 14px; margin-top:14px; font-size:.92rem; }
+  .teach input { width:100%; padding:10px; border:1px solid #c9d2e3; border-radius:10px; font-size:1rem; margin-top:6px; }
+  .teach .row { padding:8px 4px; border-bottom:1px solid #eef1f6; cursor:pointer; }
+  .learn { background:#17803d; color:#fff; border:0; border-radius:20px; padding:4px 10px; font-size:.8rem; margin-top:6px; cursor:pointer; }
   @media (min-width:700px) { .card .face { width:130px; height:130px; } }
 </style>
 </head>
@@ -50,7 +54,7 @@
     <label class="btn" id="btnCam" for="cam">📷 拍照認人</label>
     <label class="btn alt" for="pick">🖼 選相簿照片</label>
   </div>
-  <input type="file" id="cam" accept="image/*" capture="user">
+  <input type="file" id="cam" accept="image/*" capture="environment">
   <input type="file" id="pick" accept="image/*">
   <input class="search" id="q" placeholder="或輸入姓名、公司、職稱搜尋…">
   <img id="preview" alt="">
@@ -63,6 +67,10 @@ let people = [], ready = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const photoCache = {};
+let lastQ = null;
+// 一個人可存多組臉部特徵（陣列的陣列），比對取最近的
+const descs = p => !Array.isArray(p.descriptor) ? [] : (Array.isArray(p.descriptor[0]) ? p.descriptor : [p.descriptor]);
+const dist = (q, p) => Math.min(...descs(p).map(v => faceapi.euclideanDistance(q, v)));
 
 function loadPhoto(photoId, w) {
   const k = photoId + '_' + w;
@@ -73,7 +81,7 @@ function loadPhoto(photoId, w) {
 async function init() {
   const loadPeople = force => apiGet({ action: 'people', key: viewKey(force) }).then(list => {
     people = list;
-    const n = people.filter(p => Array.isArray(p.descriptor)).length;
+    const n = people.filter(p => descs(p).length).length;
     window._n = n;
     $('status').textContent = ready ? `已就緒：${people.length} 人，其中 ${n} 人可臉部比對` : `已載入 ${people.length} 人，臉部模型載入中…`;
   }).catch(e => {
@@ -120,15 +128,51 @@ async function onPhoto(e) {
   if (!dets.length) { $('status').textContent = '照片裡找不到臉，請靠近一點、正面再拍一次'; $('out').innerHTML = ''; return; }
   // 取最大的那張臉
   dets.sort((a, b) => b.detection.box.area - a.detection.box.area);
-  const q = dets[0].descriptor;
-  const known = people.filter(p => Array.isArray(p.descriptor));
-  const ranked = known.map(p => ({ p, d: faceapi.euclideanDistance(q, p.descriptor) }))
-    .sort((a, b) => a.d - b.d).slice(0, 3);
-  if (!ranked.length) { $('status').textContent = '資料庫還沒有臉部特徵，請先到後台計算'; return; }
-  const best = ranked[0];
-  $('status').textContent = best.d < 0.5 ? '找到了！' : best.d < 0.6 ? '可能是這位（相似度普通，請再確認）' : '沒有很像的人，以下是最接近的三位';
+  const q = Array.from(dets[0].descriptor).map(v => +v.toFixed(5)); lastQ = q;
+  const known = people.filter(p => descs(p).length);
+  if (!known.length) { $('status').textContent = '資料庫還沒有臉部特徵，請先到後台計算'; return; }
+  const ranked = known.map(p => ({ p, d: dist(q, p) })).sort((a, b) => a.d - b.d).slice(0, 5);
+  const best = ranked[0], gap = ranked[1] ? ranked[1].d - best.d : 1;
+  $('status').textContent = (best.d < 0.42 || (best.d < 0.5 && gap > 0.06)) ? '找到了！'
+    : (best.d < 0.58 && gap > 0.03) ? '可能是這位，請再確認' : '不太確定，以下是最接近的幾位';
   $('out').innerHTML = '';
   ranked.forEach((r, i) => renderCard(r.p, r.d, i === 0));
+  renderTeach();
+}
+
+// 教系統認得這張臉：把這次拍的特徵加到正確的人身上（需後台密碼）
+async function learn(p) {
+  if (!lastQ) return;
+  let pw = sessionStorage.getItem('emba_pw');
+  if (!pw) {
+    pw = (prompt('請輸入後台密碼，才能新增臉部特徵') || '').trim(); if (!pw) return;
+    try { await apiPost({ action: 'login', pw }); sessionStorage.setItem('emba_pw', pw); }
+    catch (e) { alert('密碼錯誤'); return; }
+  }
+  const list = descs(p).concat([lastQ]).slice(-6);
+  try {
+    await apiPost({ action: 'descriptor', pw, id: p.id, descriptor: list });
+    p.descriptor = list;
+    $('status').textContent = `已記住！${p.name_zh} 現在有 ${list.length} 組臉部特徵，下次會更準`;
+    lastQ = null; const t = document.querySelector('.teach'); if (t) t.remove();
+    document.querySelectorAll('.learn').forEach(b => b.remove());
+  } catch (e) { alert('儲存失敗：' + e.message); }
+}
+
+function renderTeach() {
+  const box = document.createElement('div'); box.className = 'teach';
+  box.innerHTML = '<b>都不是？</b>輸入正確姓名，把這張照片教給系統<input placeholder="輸入姓名…"><div class="hits"></div>';
+  $('out').appendChild(box);
+  const inp = box.querySelector('input'), hits = box.querySelector('.hits');
+  inp.oninput = () => {
+    const k = inp.value.trim().toLowerCase(); hits.innerHTML = '';
+    if (!k) return;
+    people.filter(p => (p.name_zh + ' ' + p.name_en).toLowerCase().includes(k)).slice(0, 6).forEach(p => {
+      const r = document.createElement('div'); r.className = 'row';
+      r.textContent = `${p.name_zh} ${p.name_en || ''}（${p.cohort}）→ 記住這張臉`;
+      r.onclick = () => learn(p); hits.appendChild(r);
+    });
+  };
 }
 
 function score(d) {
@@ -146,10 +190,12 @@ function renderCard(p, d, open) {
     <div class="top"><img class="face" alt="">
       <div><h2>${esc(p.name_zh)} <span class="en">${esc(p.name_en)}</span></h2>
         <span class="tag">${esc(p.cohort)} 管研</span>${d != null ? score(d) : ''}
-        <div style="margin-top:4px">${esc(p.company)}${p.title ? '・' + esc(p.title) : ''}</div></div></div>
+        <div style="margin-top:4px">${esc(p.company)}${p.title ? '・' + esc(p.title) : ''}</div>
+        ${d != null ? '<button class="learn">✔ 就是他，記住這張臉</button>' : ''}</div></div>
     <dl style="${open ? '' : 'display:none'}">${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl>
     <div class="more"><button>${open ? '看原始自介卡' : '展開資料'}</button></div>`;
   $('out').appendChild(div);
+  const lb = div.querySelector('.learn'); if (lb) lb.onclick = () => learn(p);
   const face = div.querySelector('.face');
   if (p.faceId || p.photoId) loadPhoto(p.faceId || p.photoId, p.faceId ? 0 : 400).then(src => face.src = src).catch(() => {});
   const btn = div.querySelector('.more button');
