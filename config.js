@@ -1,5 +1,5 @@
 // Apps Script 網頁應用程式網址（資料存在 Google 試算表）
-const API_URL = '__API_URL__';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwbfDXvWQFsyK7k7qcphLOPc_x64tXX7B3xQvZYQ_lmJ2r-ATCGXhKcL7dnmPm4A44n/exec';
 
 async function apiGet(params) {
   const u = new URL(API_URL);
