@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f4fa3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js"></script>
+<style>
+  :root { --c:#1f4fa3; --bg:#eef2f8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; background:var(--bg); color:#1d2433; }
+  header { background:var(--c); color:#fff; padding:14px 16px; display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:1.15rem; margin:0; }
+  header a { color:#cfe0ff; font-size:.85rem; text-decoration:none; }
+  .wrap { max-width:720px; margin:0 auto; padding:14px; }
+  .status { font-size:.9rem; color:#5a6475; margin:6px 0 12px; min-height:1.2em; }
+  .btns { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .btn { display:flex; align-items:center; justify-content:center; gap:8px; padding:16px; font-size:1.05rem; font-weight:700;
+         border:0; border-radius:14px; background:var(--c); color:#fff; cursor:pointer; }
+  .btn.alt { background:#fff; color:var(--c); border:2px solid var(--c); }
+  .btn:disabled { opacity:.5; }
+  input[type=file] { display:none; }
+  .search { width:100%; margin-top:12px; padding:13px 14px; font-size:1rem; border:1px solid #c9d2e3; border-radius:12px; }
+  #preview { width:100%; max-height:300px; object-fit:contain; border-radius:12px; margin-top:12px; display:none; background:#000; }
+  .card { background:#fff; border-radius:16px; box-shadow:0 4px 16px rgba(20,40,80,.08); margin-top:14px; overflow:hidden; }
+  .card .top { display:flex; gap:12px; padding:14px; align-items:flex-start; }
+  .card .face { width:96px; height:96px; border-radius:50%; object-fit:cover; background:#dde3ee; flex:none; }
+  .card h2 { margin:2px 0 4px; font-size:1.3rem; }
+  .card .en { color:#5a6475; font-weight:400; font-size:1rem; }
+  .tag { display:inline-block; font-size:.78rem; padding:2px 8px; border-radius:20px; background:#e3ecff; color:var(--c); margin:2px 4px 2px 0; }
+  .tag.good { background:#dff5e6; color:#17803d; } .tag.mid { background:#fff3d6; color:#9a6400; }
+  dl { margin:0; padding:0 14px 12px; display:grid; grid-template-columns:5.2em 1fr; gap:6px 8px; font-size:.95rem; }
+  dt { color:#5a6475; } dd { margin:0; word-break:break-word; }
+  .full { width:100%; display:block; border-top:1px solid #eef1f6; }
+  .more { padding:0 14px 14px; } .more button { background:none; border:0; color:var(--c); font-size:.9rem; padding:0; cursor:pointer; }
+  .list .row { display:flex; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid #eef1f6; cursor:pointer; background:#fff; }
+  .list .row:first-child { border-radius:12px 12px 0 0; } .list .row:last-child { border-radius:0 0 12px 12px; border:0; }
+  .list .row small { color:#5a6475; display:block; }
+  @media (min-width:700px) { .card .face { width:130px; height:130px; } }
+</style>
+</head>
+<body>
+<header><h1>台科大 EMBA 拍照認人</h1><a href="admin.html">後台</a></header>
+<div class="wrap">
+  <div class="status" id="status">載入中…</div>
+  <div class="btns">
+    <label class="btn" id="btnCam" for="cam">📷 拍照認人</label>
+    <label class="btn alt" for="pick">🖼 選相簿照片</label>
+  </div>
+  <input type="file" id="cam" accept="image/*" capture="user">
+  <input type="file" id="pick" accept="image/*">
+  <input class="search" id="q" placeholder="或輸入姓名、公司、職稱搜尋…">
+  <img id="preview" alt="">
+  <div id="out"></div>
+</div>
+
+<script>
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+let people = [], ready = false;
+const $ = id => document.getElementById(id);
+const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const photoCache = {};
+
+function loadPhoto(photoId, w) {
+  const k = photoId + '_' + w;
+  if (photoCache[k]) return Promise.resolve(photoCache[k]);
+  return apiGet({ action: 'photo', id: photoId, w: w || 0, key: viewKey() }).then(d => (photoCache[k] = d));
+}
+
+async function init() {
+  const loadPeople = force => apiGet({ action: 'people', key: viewKey(force) }).then(list => {
+    people = list;
+    const n = people.filter(p => Array.isArray(p.descriptor)).length;
+    window._n = n;
+    $('status').textContent = ready ? `已就緒：${people.length} 人，其中 ${n} 人可臉部比對` : `已載入 ${people.length} 人，臉部模型載入中…`;
+  }).catch(e => {
+    if (/通關碼/.test(e.message)) { localStorage.removeItem('emba_key'); return loadPeople(true); }
+    $('status').textContent = '讀取資料失敗：' + e.message;
+  });
+  loadPeople(false);
+  try {
+    await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    ready = true;
+    if (people.length) $('status').textContent = `已就緒：${people.length} 人，其中 ${window._n} 人可臉部比對`;
+  } catch (e) { $('status').textContent = '臉部模型載入失敗，仍可用文字搜尋'; }
+}
+
+function fileToImage(file) {
+  return new Promise(ok => {
+    const r = new FileReader();
+    r.onload = () => { const img = new Image(); img.onload = () => ok(img); img.src = r.result; };
+    r.readAsDataURL(file);
+  });
+}
+
+// 縮圖避免手機記憶體不足
+function shrink(img, max) {
+  const s = Math.min(1, max / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+
+async function onPhoto(e) {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  if (!ready) { $('status').textContent = '臉部模型還在載入，請稍候再拍'; return; }
+  $('status').textContent = '辨識中…';
+  const img = await fileToImage(f);
+  const canvas = shrink(img, 1000);
+  $('preview').src = canvas.toDataURL('image/jpeg', .8); $('preview').style.display = 'block';
+  const dets = await faceapi.detectAllFaces(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: .4 }))
+    .withFaceLandmarks().withFaceDescriptors();
+  if (!dets.length) { $('status').textContent = '照片裡找不到臉，請靠近一點、正面再拍一次'; $('out').innerHTML = ''; return; }
+  // 取最大的那張臉
+  dets.sort((a, b) => b.detection.box.area - a.detection.box.area);
+  const q = dets[0].descriptor;
+  const known = people.filter(p => Array.isArray(p.descriptor));
+  const ranked = known.map(p => ({ p, d: faceapi.euclideanDistance(q, p.descriptor) }))
+    .sort((a, b) => a.d - b.d).slice(0, 3);
+  if (!ranked.length) { $('status').textContent = '資料庫還沒有臉部特徵，請先到後台計算'; return; }
+  const best = ranked[0];
+  $('status').textContent = best.d < 0.5 ? '找到了！' : best.d < 0.6 ? '可能是這位（相似度普通，請再確認）' : '沒有很像的人，以下是最接近的三位';
+  $('out').innerHTML = '';
+  ranked.forEach((r, i) => renderCard(r.p, r.d, i === 0));
+}
+
+function score(d) {
+  const pct = Math.max(0, Math.min(100, Math.round((1 - d / 1.0) * 100)));
+  const cls = d < 0.5 ? 'good' : 'mid';
+  return `<span class="tag ${cls}">相似度 ${pct}%</span>`;
+}
+
+function renderCard(p, d, open) {
+  const div = document.createElement('div');
+  div.className = 'card';
+  const rows = [['系所', p.dept], ['服務單位', p.company], ['職稱', p.title], ['星座', p.zodiac],
+    ['興趣', p.hobbies], ['一句話', p.quote], ['其他', p.other]].filter(r => r[1]);
+  div.innerHTML = `
+    <div class="top"><img class="face" alt="">
+      <div><h2>${esc(p.name_zh)} <span class="en">${esc(p.name_en)}</span></h2>
+        <span class="tag">${esc(p.cohort)} 管研</span>${d != null ? score(d) : ''}
+        <div style="margin-top:4px">${esc(p.company)}${p.title ? '・' + esc(p.title) : ''}</div></div></div>
+    <dl style="${open ? '' : 'display:none'}">${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl>
+    <div class="more"><button>${open ? '看原始自介卡' : '展開資料'}</button></div>`;
+  $('out').appendChild(div);
+  const face = div.querySelector('.face');
+  if (p.faceId || p.photoId) loadPhoto(p.faceId || p.photoId, p.faceId ? 0 : 400).then(src => face.src = src).catch(() => {});
+  const btn = div.querySelector('.more button');
+  btn.onclick = () => {
+    const dl = div.querySelector('dl');
+    if (dl.style.display === 'none') { dl.style.display = ''; btn.textContent = '看原始自介卡'; return; }
+    if (div.querySelector('.full')) return;
+    btn.textContent = '載入中…';
+    loadPhoto(p.photoId, 1200).then(src => {
+      const im = document.createElement('img'); im.className = 'full'; im.src = src;
+      div.insertBefore(im, div.querySelector('.more')); btn.remove();
+    });
+  };
+}
+
+$('cam').onchange = onPhoto;
+$('pick').onchange = onPhoto;
+let t;
+$('q').oninput = () => {
+  clearTimeout(t);
+  t = setTimeout(() => {
+    const k = $('q').value.trim().toLowerCase();
+    $('preview').style.display = 'none';
+    $('out').innerHTML = '';
+    if (!k) return;
+    const hits = people.filter(p => [p.name_zh, p.name_en, p.company, p.title, p.dept, p.hobbies, p.cohort]
+      .join(' ').toLowerCase().includes(k)).slice(0, 20);
+    $('status').textContent = `搜尋到 ${hits.length} 位`;
+    hits.forEach((p, i) => renderCard(p, null, hits.length === 1));
+  }, 250);
+};
+init();
+</script>
+</body>
+</html>
