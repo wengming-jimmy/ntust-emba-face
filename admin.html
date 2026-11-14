@@ -51,7 +51,7 @@
     <div class="box">
       <div class="bar">
         <input id="q" placeholder="搜尋姓名、公司…">
-        <select id="fc" style="width:auto"><option value="">全部屆別</option><option>114</option><option>115</option></select>
+        <select id="fc" style="width:auto"><option value="">全部分類</option><option value="115">EMBA 115</option><option value="114">EMBA 114</option><option>獅子會</option><option>家長會</option><option>其他</option></select>
         <button onclick="edit(null)">＋ 新增</button>
         <button class="alt" onclick="rebuild()">重算缺少的臉部特徵</button>
       </div>
@@ -72,8 +72,8 @@
     </div>
   </div>
   <div class="form" style="margin-top:12px">
-    <div><label>屆別</label><select id="f_cohort"><option>115</option><option>114</option><option>113</option><option>116</option></select></div>
-    <div><label>系所</label><input id="f_dept" placeholder="管研甲 / 管研乙"></div>
+    <div><label>分類</label><select id="f_cohort"><optgroup label="台科大 EMBA"><option value="115">EMBA 115</option><option value="114">EMBA 114</option><option value="113">EMBA 113</option><option value="116">EMBA 116</option></optgroup><option>獅子會</option><option>家長會</option><option>其他</option></select></div>
+    <div><label>系所／所屬</label><input id="f_dept" placeholder="管研乙、日月光獅子會、某某國小家長會…"></div>
     <div><label>中文姓名</label><input id="f_name_zh"></div>
     <div><label>英文名</label><input id="f_name_en"></div>
     <div><label>服務單位</label><input id="f_company"></div>
@@ -92,6 +92,7 @@
 
 <script>
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+const catLabel = c => /^\d+$/.test(c || '') ? 'EMBA ' + c : (c || '');
 const FIELDS = ['cohort','dept','name_zh','name_en','company','title','zodiac','hobbies','quote','other'];
 const $ = id => document.getElementById(id);
 const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -131,7 +132,7 @@ function render() {
   $('list').innerHTML = '';
   list.forEach(p => {
     const d = document.createElement('div'); d.className = 'item';
-    d.innerHTML = `<img alt=""><b>${esc(p.name_zh)}</b><small>${esc(p.cohort)} ${esc(p.dept)}</small><small>${esc(p.company)}</small>` +
+    d.innerHTML = `<img alt=""><b>${esc(p.name_zh)}</b><small>${esc(catLabel(p.cohort))} ${esc(p.dept)}</small><small>${esc(p.company)}</small>` +
       (Array.isArray(p.descriptor) ? '' : '<div class="warn">缺臉部特徵</div>');
     d.onclick = () => edit(p);
     $('list').appendChild(d);

@@ -67,6 +67,7 @@ let people = [], ready = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const photoCache = {};
+const catLabel = c => /^\d+$/.test(c || '') ? 'EMBA ' + c : (c || '');
 let lastQ = null;
 // 一個人可存多組臉部特徵（陣列的陣列），比對取最近的
 const descs = p => !Array.isArray(p.descriptor) ? [] : (Array.isArray(p.descriptor[0]) ? p.descriptor : [p.descriptor]);
@@ -169,7 +170,7 @@ function renderTeach() {
     if (!k) return;
     people.filter(p => (p.name_zh + ' ' + p.name_en).toLowerCase().includes(k)).slice(0, 6).forEach(p => {
       const r = document.createElement('div'); r.className = 'row';
-      r.textContent = `${p.name_zh} ${p.name_en || ''}（${p.cohort}）→ 記住這張臉`;
+      r.textContent = `${p.name_zh} ${p.name_en || ''}（${catLabel(p.cohort)}）→ 記住這張臉`;
       r.onclick = () => learn(p); hits.appendChild(r);
     });
   };
@@ -189,7 +190,7 @@ function renderCard(p, d, open) {
   div.innerHTML = `
     <div class="top"><img class="face" alt="">
       <div><h2>${esc(p.name_zh)} <span class="en">${esc(p.name_en)}</span></h2>
-        <span class="tag">${esc(p.cohort)} 管研</span>${d != null ? score(d) : ''}
+        <span class="tag">${esc(catLabel(p.cohort))}</span>${d != null ? score(d) : ''}
         <div style="margin-top:4px">${esc(p.company)}${p.title ? '・' + esc(p.title) : ''}</div>
         ${d != null ? '<button class="learn">✔ 就是他，記住這張臉</button>' : ''}</div></div>
     <dl style="${open ? '' : 'display:none'}">${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl>
