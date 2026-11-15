@@ -86,25 +86,45 @@ function loadPhoto(photoId, w) {
   return apiGet({ action: 'photo', id: photoId, w: w || 0, key: viewKey() }).then(d => (photoCache[k] = d));
 }
 
+let peopleReady = false;
 async function init() {
+  const t0 = Date.now();
+  const show = () => {
+    const n = people.filter(p => descs(p).length).length; window._n = n;
+    if (ready && peopleReady) $('status').textContent = `已就緒：${people.length} 人，其中 ${n} 人可臉部比對`;
+    else if (peopleReady) $('status').textContent = `已載入 ${people.length} 人，臉部模型準備中…`;
+  };
+  // 先用手機裡上次存的名單，馬上可用；背景再向資料庫更新
+  try {
+    const c = JSON.parse(localStorage.getItem('emba_people') || 'null');
+    if (Array.isArray(c) && c.length) { people = c; peopleReady = true; show(); }
+  } catch (e) {}
   const loadPeople = force => apiGet({ action: 'people', key: viewKey(force) }).then(list => {
-    people = list;
-    const n = people.filter(p => descs(p).length).length;
-    window._n = n;
-    $('status').textContent = ready ? `已就緒：${people.length} 人，其中 ${n} 人可臉部比對` : `已載入 ${people.length} 人，臉部模型載入中…`;
+    people = list; peopleReady = true;
+    try { localStorage.setItem('emba_people', JSON.stringify(list)); } catch (e) {}
+    show();
   }).catch(e => {
     if (/通關碼/.test(e.message)) { localStorage.removeItem('emba_key'); return loadPeople(true); }
-    $('status').textContent = '讀取資料失敗：' + e.message;
+    if (!peopleReady) $('status').textContent = '讀取資料失敗：' + e.message;
   });
   loadPeople(false);
   try {
-    await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-    ready = true;
-    if (people.length) $('status').textContent = `已就緒：${people.length} 人，其中 ${window._n} 人可臉部比對`;
-  } catch (e) { $('status').textContent = '臉部模型載入失敗，仍可用文字搜尋'; }
+    if (!peopleReady) $('status').textContent = '載入名單與臉部模型中…';
+    await Promise.all([
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)]);
+    // 暖機：先跑一次空白辨識，讓手機 GPU 編譯好，第一次拍照才不會卡在「辨識中」
+    if (peopleReady) $('status').textContent = `已載入 ${people.length} 人，臉部模型暖機中…`;
+    const w = document.createElement('canvas'); w.width = w.height = 160;
+    w.getContext('2d').fillRect(0, 0, 160, 160);
+    await faceapi.detectAllFaces(w, new faceapi.SsdMobilenetv1Options({ minConfidence: .4 }));
+    await faceapi.computeFaceDescriptor(w);
+    ready = true; show();
+    console.log('ready in', Date.now() - t0, 'ms, backend', faceapi.tf && faceapi.tf.getBackend && faceapi.tf.getBackend());
+  } catch (e) { $('status').textContent = '臉部模型載入失敗，仍可用文字搜尋（' + e.message + '）'; }
 }
+const waitReady = () => new Promise(ok => { const f = () => (ready && peopleReady) ? ok() : setTimeout(f, 200); f(); });
 
 function fileToImage(file) {
   return new Promise(ok => {
@@ -126,9 +146,9 @@ function shrink(img, max) {
 async function onPhoto(e) {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
-  if (!ready) { $('status').textContent = '臉部模型還在載入，請稍候再拍'; return; }
-  $('status').textContent = '辨識中…';
-  recognize(shrink(await fileToImage(f), 1000));
+  const canvas = shrink(await fileToImage(f), 800);
+  if (!(ready && peopleReady)) { $('status').textContent = '照片已收到，等模型準備好就自動辨識…'; await waitReady(); }
+  recognize(canvas);
 }
 
 // 網頁內建相機（三星等 Android 瀏覽器會忽略 capture，改用 getUserMedia）
@@ -152,12 +172,19 @@ $('shot').onclick = () => {
   const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
   c.getContext('2d').drawImage(v, 0, 0);
   closeCam();
-  if (!ready) { $('status').textContent = '臉部模型還在載入，請稍候再拍'; return; }
-  $('status').textContent = '辨識中…';
-  recognize(shrink(c, 1000));
+  const canvas = shrink(c, 800);
+  (async () => {
+    if (!(ready && peopleReady)) { $('status').textContent = '照片已收到，等模型準備好就自動辨識…'; await waitReady(); }
+    recognize(canvas);
+  })();
 };
 
 async function recognize(canvas) {
+  $('status').textContent = '辨識中…';
+  try { await recognize2(canvas); }
+  catch (e) { $('status').textContent = '辨識失敗：' + e.message + '，請再拍一次'; }
+}
+async function recognize2(canvas) {
   $('preview').src = canvas.toDataURL('image/jpeg', .8); $('preview').style.display = 'block';
   const dets = await faceapi.detectAllFaces(canvas, new faceapi.SsdMobilenetv1Options({ minConfidence: .4 }))
     .withFaceLandmarks().withFaceDescriptors();
