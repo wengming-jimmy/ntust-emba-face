@@ -153,14 +153,19 @@ async function onPhoto(e) {
 
 // 網頁內建相機（三星等 Android 瀏覽器會忽略 capture，改用 getUserMedia）
 let stream = null, facing = 'environment';
+// iPhone/iPad（Safari、Chrome 都是 WebKit）原生 capture 最穩，直接開系統相機
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 async function openCam() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('cam').click(); return; }
+  if (isIOS || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('cam').click(); return; }
+  const prevStatus = $('status').textContent; $('status').textContent = '開啟相機中…';
+  const slow = setTimeout(() => { if (!stream) $('status').textContent = '相機遲遲沒有開啟，請允許相機權限，或改按「選相簿照片」'; }, 6000);
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false });
-    $('vid').srcObject = stream; $('camBox').style.display = 'flex';
+    clearTimeout(slow);
+    $('vid').srcObject = stream; $('camBox').style.display = 'flex'; $('status').textContent = prevStatus;
   } catch (err) {
-    $('status').textContent = '無法開啟相機（' + (err.name || err) + '），請在瀏覽器設定允許相機，或改用相簿照片';
-    $('cam').click();
+    clearTimeout(slow);
+    $('status').textContent = '無法開啟相機（' + (err.name || err) + '），請在瀏覽器設定允許相機，或改按「選相簿照片」';
   }
 }
 function closeCam() { if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; $('camBox').style.display = 'none'; }
