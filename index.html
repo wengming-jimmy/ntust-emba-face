@@ -1,6 +1,11 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<script>
+// LINE 內建瀏覽器載入模型常卡住、相機也受限：自動改用手機預設瀏覽器開啟
+(function(){ if (/\bLine\//i.test(navigator.userAgent) && !/openExternalBrowser=1/.test(location.search)) {
+  location.replace(location.pathname + (location.search ? location.search + '&' : '?') + 'openExternalBrowser=1' + location.hash); } })();
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <link rel="manifest" href="manifest.json">
